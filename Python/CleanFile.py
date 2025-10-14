@@ -1,91 +1,55 @@
-# Professional data cleaning (pandas-only)
-# Keeps 'duration', keeps y as "yes"/"no", adds 'year' beside 'education'
-# Keeps age as actual value (not normalized)
-# 2-decimal numeric output, uppercase "N/A"
+# Professional data cleaning using pandas only
+# Extracts 'year' from 'education', normalizes text, replaces 'unknown' with 'N/A',
+# expands weekdays to full names, and rounds specified columns.
 
 import pandas as pd
 
 INPUT_PATH  = "bank-additional-full.csv"
-OUTPUT_PATH = "bank_cleaned_final1.csv"
+OUTPUT_PATH = "bank_cleaned_final.csv"
 SEP = ";"
 
-KEEP_COLS = [
-    "age","job","marital","education","default","housing","loan",
-    "contact","month","day_of_week","duration","campaign","pdays","previous","poutcome",
-    "emp.var.rate","cons.price.idx","cons.conf.idx","euribor3m","nr.employed","y"
-]
-
-NUMERIC_COLS = [
-    "duration","campaign","pdays","previous",
-    "emp.var.rate","cons.price.idx","cons.conf.idx","euribor3m","nr.employed"
-]  # age excluded from scaling
-
+# Load dataset
 df = pd.read_csv(INPUT_PATH, sep=SEP)
-df = df[[c for c in KEEP_COLS if c in df.columns]].copy()
 
-df = df.replace(r'^\s*$', pd.NA, regex=True).replace('unknown', pd.NA)
+# Replace 'unknown' with 'N/A'
+df = df.replace('unknown', 'N/A')
 
-cat_cols = [c for c in df.columns if c not in NUMERIC_COLS + ["y","age"]]
-for c in cat_cols:
-    s = df[c].astype(str).str.strip().str.lower()
-    s = s.mask(s.isin(["nan","none","nat"]), pd.NA)
-    df[c] = s
+# Create 'year' column from education (e.g., 'basic 4y' → '4', else 'N/A')
+edu_series = df['education'].astype(str)
+df['year'] = edu_series.str.extract(r'(\d+)(?=y)', expand=False).fillna('N/A')
 
-# Create 'year' from education and simplify education text
-df["year"] = df["education"].astype(str).str.extract(r'(\d+)')
-df["year"] = df["year"].fillna("N/A")
-df["education"] = df["education"].astype(str).str.replace(r'[\.\d+y]', '', regex=True).str.strip()
-df.loc[df["education"].isin(["", "nan", "none", "nat"]), "education"] = "N/A"
+# Clean 'education' text (remove numeric part, keep only base level)
+df['education'] = (
+    edu_series
+    .str.replace(r'[\.\s]*\d+\s*y', '', regex=True)
+    .str.replace(r'\.', '', regex=True)
+    .str.strip()
+    .str.lower()
+)
+df.loc[df['education'].isin(['', 'nan']), 'education'] = 'N/A'
 
-# Place 'year' beside 'education'
+# Move 'year' column right after 'education'
 cols = df.columns.tolist()
-if "education" in cols and "year" in cols:
-    edu_i = cols.index("education")
-    cols.insert(edu_i + 1, cols.pop(cols.index("year")))
+if 'education' in cols and 'year' in cols:
+    edu_idx = cols.index('education')
+    cols.insert(edu_idx + 1, cols.pop(cols.index('year')))
     df = df[cols]
 
-# Convert numerics
-for c in NUMERIC_COLS + ["age"]:
-    if c in df.columns:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+# Expand abbreviated weekdays (mon → monday)
+dow_map = {
+    'mon': 'monday', 'tue': 'tuesday', 'wed': 'wednesday',
+    'thu': 'thursday', 'fri': 'friday', 'sat': 'saturday', 'sun': 'sunday'
+}
+if 'day_of_week' in df.columns:
+    s = df['day_of_week'].astype(str).str.strip().str.lower()
+    df['day_of_week'] = s.map(dow_map).fillna(s)
 
-if "pdays" in df.columns:
-    df["pdays"] = df["pdays"].mask(df["pdays"] == 999, pd.NA)
+# Round specific numeric columns to 2 decimals
+for col in ['cons.price.idx', 'euribor3m']:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce').round(2)
 
-# Impute missing
-for c in df.columns:
-    if c in NUMERIC_COLS + ["age"]:
-        df[c] = df[c].fillna(df[c].median())
-    elif c != "y":
-        mode_val = df[c].mode(dropna=True)
-        df[c] = df[c].fillna(mode_val.iloc[0] if not mode_val.empty else "N/A")
-
-# Outlier capping
-for c in NUMERIC_COLS + ["age"]:
-    q1, q3 = df[c].quantile([0.25, 0.75])
-    iqr = q3 - q1
-    lb, ub = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-    df[c] = df[c].clip(lb, ub)
-
-# Scale all numeric columns EXCEPT age
-for c in NUMERIC_COLS:
-    mn, mx = df[c].min(), df[c].max()
-    df[c] = 0.0 if pd.isna(mn) or pd.isna(mx) or mx == mn else (df[c] - mn) / (mx - mn)
-
-# Round numeric values to two decimals
-float_cols = df.select_dtypes(include=["float64","float32"]).columns
-df[float_cols] = df[float_cols].round(2)
-
-# Replace NA with uppercase "N/A"
-df = df.fillna("N/A")
-obj_cols = df.select_dtypes(include=["object"]).columns
-for c in obj_cols:
-    df[c] = df[c].replace(to_replace=r'(?i)^\s*n/?a\s*$', value="N/A", regex=True)
-
-# Keep y as yes/no or N/A
-if "y" in df.columns:
-    df["y"] = df["y"].astype(str).str.strip().str.lower()
-    df["y"] = df["y"].where(df["y"].isin(["yes","no"]), other="N/A")
-
-df.to_csv(OUTPUT_PATH, index=False, float_format="%.2f")
-print(f"Saved: {OUTPUT_PATH} | Shape: {df.shape}")
+# Save cleaned dataset
+df.to_csv(OUTPUT_PATH, index=False)
+print(f"✅ Cleaned dataset saved → {OUTPUT_PATH}")
+print("Shape:", df.shape)
