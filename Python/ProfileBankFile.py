@@ -9,6 +9,8 @@ print("\n--- Data Info ---")
 print(df.info())
 print("\n--- First 5 rows ---")
 print(df.head())
+print(" Data Types")
+print(df.dtypes)
 
 print("\n--- Summary of numeric columns ---")
 print(df.describe().T)
